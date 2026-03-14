@@ -1,20 +1,63 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { authClient, useSession, signOut } from "@/lib/auth-client";
+import { useRouter } from "next/navigation";
 
 export default function Home() {
   const { data: session, isPending } = useSession();
+  const router = useRouter();
   
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
   const [step, setStep] = useState("email"); // "email" or "otp"
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  const [orgName, setOrgName] = useState("");
+  const [orgSlug, setOrgSlug] = useState("");
+  const [organizations, setOrganizations] = useState([]);
+  
+  useEffect(() => {
+    if (session) {
+      loadOrganizations();
+    }
+  }, [session]);
+
+  const loadOrganizations = async () => {
+    try {
+      const orgs = await authClient.organization.list();
+      if (orgs?.data) {
+        setOrganizations(orgs.data);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleCreateOrg = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      const result = await authClient.organization.create({
+        name: orgName,
+        slug: orgSlug
+      });
+      if (result?.error) throw result.error;
+      setOrgName("");
+      setOrgSlug("");
+      loadOrganizations(); // Reload after creation
+    } catch (err) {
+      setError(err?.message || "Failed to create organization.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleSendOtp = async (e) => {
     e.preventDefault();
@@ -80,16 +123,31 @@ export default function Home() {
             </div>
             
             <div className="pt-4 border-t">
-              <h3 className="font-medium text-sm mb-2">Organizations (Plugin active)</h3>
-              <div className="flex gap-2">
-                <Button 
-                  variant="outline" 
-                  size="sm" 
-                  onClick={() => alert("Organization creation feature coming soon!")}
-                >
-                  Create Organization
+              <h3 className="font-medium text-sm mb-2">Organizations</h3>
+              {error && <p className="text-sm text-red-500 mb-2">{error}</p>}
+              
+              <ul className="mb-4 space-y-2">
+                {organizations.map((org) => (
+                  <li key={org.id} className="flex justify-between items-center text-sm border p-2 rounded">
+                    <span>{org.name} ({org.slug})</span>
+                    <Button size="sm" onClick={() => router.push(`/chat?orgId=${org.id}`)}>Go to Chat</Button>
+                  </li>
+                ))}
+              </ul>
+
+              <form onSubmit={handleCreateOrg} className="space-y-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">Org Name</Label>
+                  <Input size="sm" value={orgName} onChange={e => setOrgName(e.target.value)} required />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Org Slug</Label>
+                  <Input size="sm" value={orgSlug} onChange={e => setOrgSlug(e.target.value)} required />
+                </div>
+                <Button type="submit" size="sm" className="w-full" disabled={loading}>
+                  {loading ? "Creating..." : "Create Organization"}
                 </Button>
-              </div>
+              </form>
             </div>
 
             <div className="pt-6">
