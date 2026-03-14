@@ -1,0 +1,38 @@
+{
+    "name": "backend",
+    "version": "1.0.0",
+    "description": "",
+    "main": "index.js",
+    "scripts": {
+        "start": "node index.js",
+        "dev": "nodemon index.js",
+        "prisma:generate": "prisma generate",
+        "prisma:migrate": "prisma migrate dev",
+        "prisma:studio": "prisma studio"
+    },
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "type": "module",
+    "dependencies": {
+        "@better-auth/prisma-adapter": "^1.5.5",
+        "better-auth": "^1.5.5",
+        "cookie": "^1.1.1",
+        "cors": "^2.8.6",
+        "express": "^5.2.1",
+        "morgan": "^1.10.1",
+        "redis": "^5.11.0",
+        "resend": "^6.9.3",
+        "socket.io": "^4.8.3",
+        "zod": "^4.3.6"
+    },
+    "devDependencies": {
+        "@prisma/adapter-pg": "^7.5.0",
+        "@prisma/client": "^7.5.0",
+        "@types/pg": "^8.18.0",
+        "dotenv": "^17.3.1",
+        "nodemon": "^3.1.14",
+        "pg": "^8.20.0",
+        "prisma": "^7.5.0"
+    }
+}
