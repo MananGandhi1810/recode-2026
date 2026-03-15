@@ -1,474 +1,364 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { io } from "socket.io-client";
-import { useSession, authClient } from "@/lib/auth-client";
+import { useSession, authClient, signOut } from "@/lib/auth-client";
+import { Loader2, X, Hash, Save, Shield, User, Key, Bell, Zap, LogOut, CheckCircle, Search, Settings, MoreHorizontal, Plus, Users, ShieldAlert, Palette } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Hash, Plus, Users, LayoutDashboard, LogOut, Send, MoreVertical, MessageSquare } from "lucide-react";
+import { cn } from "@/lib/utils";
 
-const formatMessageTime = (dateStr) => {
-  const d = new Date(dateStr);
-  const now = new Date();
-  if (d.toDateString() === now.toDateString()) {
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  }
-  return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' at ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-};
+import ServerSidebar from "@/components/chat/ServerSidebar";
+import ChannelSidebar from "@/components/chat/ChannelSidebar";
+import ChatArea from "@/components/chat/ChatArea";
+import MemberSidebar from "@/components/chat/MemberSidebar";
+
+const SettingTab = ({ icon: Icon, label, active, onClick, danger }) => (
+  <button 
+    onClick={onClick}
+    className={cn(
+      "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[12px] font-bold uppercase tracking-wider transition-all text-left",
+      active 
+        ? "bg-indigo-600/10 text-indigo-400 shadow-sm" 
+        : danger 
+          ? "text-rose-500 hover:bg-rose-500/10" 
+          : "text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+    )}
+  >
+    <Icon className="w-4 h-4 shrink-0" />
+    <span className="truncate">{label}</span>
+  </button>
+);
 
 export default function ChatPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const orgId = searchParams.get("orgId");
   const { data: session, isPending } = useSession();
-  const { data: activeOrg } = authClient.useActiveOrganization();
-
-  const [socket, setSocket] = useState(null);
-  const [channels, setChannels] = useState([]);
-  const [activeChannel, setActiveChannel] = useState(null);
-  const activeChannelRef = useRef(null);
   
-  useEffect(() => {
-    activeChannelRef.current = activeChannel;
-  }, [activeChannel]);
-
+  const [socket, setSocket] = useState(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [organizations, setOrganizations] = useState([]);
+  const [channels, setChannels] = useState([]);
+  const [dms, setDms] = useState([]);
+  const [members, setMembers] = useState([]);
+  const [activeChannel, setActiveChannel] = useState(null);
   const [messages, setMessages] = useState([]);
   const [inputMessage, setInputMessage] = useState("");
-  const [isConnected, setIsConnected] = useState(false);
-  
-  // Modal state
+  const [typingUsers, setTypingUsers] = useState({});
+  const [userPermissions, setUserPermissions] = useState([]);
+  const [replyingTo, setReplyTo] = useState(null);
+
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isOrgSettingsOpen, setIsOrgSettingsOpen] = useState(false);
+  const [orgSettingsTab, setOrgSettingsTab] = useState("members");
+  const [isRoleModalOpen, setIsRoleModalOpen] = useState(false);
+  const [selectedMember, setSelectedMember] = useState(null);
+  const [availableRoles, setAvailableRoles] = useState([]);
   const [newChannelName, setNewChannelName] = useState("");
   const [newChannelDesc, setNewChannelDesc] = useState("");
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [activeSettingsTab, setActiveSettingsTab] = useState("identity");
+  const [editName, setEditName] = useState("");
+  const [editJobTitle, setEditJobTitle] = useState("");
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
 
-  const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
-  const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState("member");
+  const activeChannelRef = useRef(null);
+  useEffect(() => { activeChannelRef.current = activeChannel; }, [activeChannel]);
 
-  const scrollRef = useRef(null);
+  const refreshData = useCallback(async () => {
+    if (!orgId) return;
+    try {
+      const [chRes, dmRes, memRes, roleRes] = await Promise.all([
+        fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/orgs/${orgId}/channels`, { credentials: "include" }).then(r => r.json()),
+        fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/orgs/${orgId}/dms`, { credentials: "include" }).then(r => r.json()),
+        fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/orgs/${orgId}/members`, { credentials: "include" }).then(r => r.json()),
+        fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/orgs/${orgId}/roles`, { credentials: "include" }).then(r => r.json())
+      ]);
 
-  // 1. Initialize logic
+      if (chRes.success) setChannels(chRes.data);
+      if (dmRes.success) setDms(dmRes.data);
+      if (roleRes.success) setAvailableRoles(roleRes.data);
+      if (memRes.success) {
+        setMembers(memRes.data);
+        const me = memRes.data.find(m => m.userId === session?.user?.id);
+        if (me) setUserPermissions(me.permissions || []);
+      }
+      
+      // Auto-select first channel if none active
+      if (chRes.success && chRes.data.length > 0 && !activeChannelRef.current) {
+        handleSelectChannel(chRes.data[0]);
+      }
+    } catch (e) { console.error("Refresh failed", e); }
+  }, [orgId, session?.user?.id]);
+
   useEffect(() => {
     if (isPending) return;
-    if (!session?.user) {
-      router.push("/");
-      return;
-    }
-    if (!orgId) {
-      router.push("/");
-      return;
-    }
+    if (!session?.user) { router.push("/"); return; }
+    
+    const init = async () => {
+      try {
+        const orgs = await authClient.organization.list();
+        if (orgs?.data) {
+          setOrganizations(orgs.data);
+          if (!orgId && orgs.data.length > 0) {
+            router.push(`/chat?orgId=${orgs.data[0].id}`);
+            return;
+          }
+        }
+        if (orgId) {
+          await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/orgs/${orgId}/init`, { method: "POST", credentials: "include" });
+          refreshData();
+        }
+      } catch (e) { console.error(e); }
+    };
+    init();
+  }, [orgId, session, isPending, router, refreshData]);
 
-    loadChannels();
+  useEffect(() => {
+    if (!orgId || !session?.user) return;
 
     const newSocket = io(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000", {
-      withCredentials: true, 
-      transports: ['websocket', 'polling']
+      withCredentials: true, transports: ['websocket', 'polling']
     });
-
-    setSocket(newSocket);
 
     newSocket.on("connect", () => {
       setIsConnected(true);
+      if (activeChannelRef.current) newSocket.emit("join_room", { roomId: activeChannelRef.current.id });
     });
 
-    newSocket.on("disconnect", () => {
-      setIsConnected(false);
-    });
+    newSocket.on("disconnect", () => setIsConnected(false));
 
-    newSocket.on("new_message", (messageData) => {
-      setMessages((prev) => {
-        // Use the ref to get the most up-to-date activeChannel
-        const currentChannel = activeChannelRef.current;
-        if (currentChannel && messageData.channelId === currentChannel.id) {
-          return [...prev, messageData];
-        }
-        return prev;
-      });
-      scrollToBottom();
-    });
-
-    return () => {
-      newSocket.disconnect();
-    };
-  }, [orgId, session, isPending, router]);
-
-  // 2. Fetch Channels
-  const loadChannels = async () => {
-    try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/orgs/${orgId}/channels`, {
-        credentials: "include"
-      });
-      const json = await res.json();
-      if (json.success) {
-        setChannels(json.data);
-        if (json.data.length > 0 && !activeChannel) {
-          handleSelectChannel(json.data[0]);
-        }
+    newSocket.on("new_message", (msg) => {
+      if (msg.channelId === activeChannelRef.current?.id) {
+        setMessages(prev => prev.some(m => m.id === msg.id) ? prev : [...prev, msg]);
       }
-    } catch (e) {
-      console.error(e);
-    }
-  };
+    });
 
-  // 3. Switch Channel
-  const handleSelectChannel = async (channel) => {
-    if (activeChannel && socket) {
-      socket.emit("leave_room", { roomId: activeChannel.id });
-    }
-    
+    newSocket.on("message_deleted", ({ messageId }) => {
+      setMessages(prev => prev.filter(m => m.id !== messageId));
+    });
+
+    newSocket.on("reaction_added", ({ reaction, messageId }) => {
+      setMessages(prev => prev.map(m => m.id === messageId ? { ...m, reactions: [...(m.reactions || []), reaction] } : m));
+    });
+
+    newSocket.on("reaction_removed", ({ reactionId, messageId }) => {
+      setMessages(prev => prev.map(m => m.id === messageId ? { ...m, reactions: (m.reactions || []).filter(r => r.id !== reactionId) } : m));
+    });
+
+    setSocket(newSocket);
+    return () => { newSocket.disconnect(); };
+  }, [orgId, session?.user?.id]);
+
+  const handleSelectChannel = useCallback((channel) => {
+    if (activeChannelRef.current && socket) socket.emit("leave_room", { roomId: activeChannelRef.current.id });
     setActiveChannel(channel);
-    setMessages([]); // Clear until load
+    setMessages([]);
+    if (socket) socket.emit("join_room", { roomId: channel.id });
     
-    if (socket) {
-      socket.emit("join_room", { roomId: channel.id });
-    }
+    fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/orgs/${orgId}/channels/${channel.id}/messages`, { credentials: "include" })
+      .then(r => r.json())
+      .then(json => { if (json.success) setMessages(json.data); });
+  }, [orgId, socket]);
+
+  const handleSendMessage = (e, attachment) => {
+    if (e) e.preventDefault();
+    if ((!inputMessage.trim() && !attachment) || !socket || !activeChannel) return;
     
-    // Load messages
-    try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/orgs/${orgId}/channels/${channel.id}/messages`, {
-        credentials: "include"
-      });
-      const json = await res.json();
-      if (json.success) {
-        setMessages(json.data); // data is already reversed by backend
-        scrollToBottom();
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const scrollToBottom = () => {
-    if (scrollRef.current) {
-      setTimeout(() => {
-         scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-      }, 50);
-    }
-  };
-
-  const handleCreateChannel = async (e) => {
-    e.preventDefault();
-    if (!newChannelName.trim()) return;
-    try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/orgs/${orgId}/channels`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ name: newChannelName.toLowerCase().replace(/\s+/g, '-'), description: newChannelDesc })
-      });
-      const json = await res.json();
-      if (json.success) {
-        setChannels([...channels, json.data]);
-        setIsModalOpen(false);
-        setNewChannelName("");
-        setNewChannelDesc("");
-        handleSelectChannel(json.data);
-      } else {
-        alert(json.message || "Failed to create channel");
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const handleInviteMember = async (e) => {
-    e.preventDefault();
-    if (!inviteEmail.trim()) return;
-    try {
-      const result = await authClient.organization.inviteMember({
-        organizationId: orgId,
-        email: inviteEmail,
-        role: inviteRole
-      });
-      if (result.error) throw result.error;
-      alert("Invitation sent!");
-      setIsInviteModalOpen(false);
-      setInviteEmail("");
-    } catch (e) {
-      console.error(e);
-      alert(e.message || "Failed to invite member");
-    }
-  };
-
-  const handleSendMessage = (e) => {
-    e.preventDefault();
-    if (!inputMessage.trim() || !socket || !activeChannel) return;
-
-    const messageData = {
-      content: inputMessage,
-      channelId: activeChannel.id,
-      organizationId: orgId
-    };
-
-    socket.emit("send_message", messageData);
+    socket.emit("send_message", {
+      content: inputMessage, 
+      channelId: activeChannel.id, 
+      organizationId: orgId,
+      parentMessageId: replyingTo?.id,
+      ...(attachment && {
+        attachmentUrl: attachment.url, attachmentType: attachment.type, attachmentName: attachment.name, attachmentSize: attachment.size
+      })
+    });
     setInputMessage("");
+    setReplyTo(null);
   };
 
-  if (isPending || !session) {
-    return <div className="h-screen w-full flex items-center justify-center bg-background">Loading...</div>;
-  }
+  const handleUpdateProfile = async () => {
+    setIsSavingProfile(true);
+    try {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/user/profile`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
+        body: JSON.stringify({ name: editName, jobTitle: editJobTitle })
+      });
+      if ((await res.json()).success) {
+        await authClient.updateUser({ name: editName });
+        setIsSettingsOpen(false);
+        refreshData();
+      }
+    } catch (e) { console.error(e); }
+    finally { setIsSavingProfile(false); }
+  };
+
+  const hasPermission = useCallback((p) => userPermissions.includes(p) || userPermissions.includes("MANAGE_SERVER"), [userPermissions]);
+
+  if (isPending || !session?.user) return (
+    <div className="h-screen w-full bg-zinc-950 flex flex-col items-center justify-center text-zinc-100">
+      <Loader2 className="w-8 h-8 animate-spin text-indigo-500 mb-4" />
+      <p className="text-sm font-bold uppercase tracking-widest text-zinc-500">Connecting to Nexus</p>
+    </div>
+  );
+
+  const activeOrg = organizations.find(o => o.id === orgId);
 
   return (
-    <div className="flex h-screen w-full bg-background overflow-hidden font-sans">
+    <div className="flex h-screen w-full bg-zinc-950 text-zinc-100 overflow-hidden font-sans selection:bg-indigo-500/30">
+      <ServerSidebar 
+        organizations={organizations} activeOrgId={orgId}
+        onOrgSelect={(id) => router.push(id ? `/chat?orgId=${id}` : '/')}
+        onSettingsClick={() => { setEditName(session.user.name); setEditJobTitle(session.user.jobTitle || ""); setIsSettingsOpen(true); }}
+        userImage={session.user.image} userName={session.user.name}
+      />
       
-      {/* Sidebar Area */}
-      <aside className="w-64 bg-[#3F0E40] text-zinc-300 flex flex-col flex-shrink-0">
-        <div className="h-14 border-b border-[#522653] flex items-center px-4 justify-between font-bold text-white shadow-sm hover:bg-[#350d36] transition cursor-pointer">
-          <div className="flex items-center gap-2 truncate">
-             <span className="truncate">{activeOrg?.name || "Organization"}</span>
-          </div>
-          <button 
-            onClick={() => setIsInviteModalOpen(true)} 
-            className="p-1 hover:bg-[#522653] rounded transition disabled:opacity-50 disabled:cursor-not-allowed" 
-            title="Invite User"
-            disabled={activeOrg?.activeMember?.role === "member"}
-          >
-            <Users className="w-4 h-4 text-white" />
-          </button>
-        </div>
-        
-        <div className="flex-1 overflow-y-auto py-4">
-          <div className="px-4 mb-1 flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-[#b8a5b8]">
-            <span>Channels</span>
-            <button 
-              onClick={() => setIsModalOpen(true)} 
-              className="hover:bg-[#522653] p-1 rounded-md transition text-[#b8a5b8] hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"
-              disabled={activeOrg?.activeMember?.role === "member"}
-            >
-              <Plus className="w-4 h-4" />
-            </button>
-          </div>
+      {orgId && (
+        <>
+          <ChannelSidebar 
+            orgName={activeOrg?.name || "Nexus"} channels={channels} dms={dms} activeChannelId={activeChannel?.id}
+            onChannelSelect={handleSelectChannel} onCreateChannelClick={() => setIsModalOpen(true)}
+            onOrgSettingsClick={() => setIsOrgSettingsOpen(true)} user={session.user}
+            hasAdminPrivileges={hasPermission("MANAGE_SERVER") || hasPermission("MANAGE_ROLES")}
+          />
           
-          <div className="space-y-[2px] px-2 mb-6">
-            {channels.map(channel => (
-              <button 
-                key={channel.id}
-                onClick={() => handleSelectChannel(channel)}
-                className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition-colors ${
-                  activeChannel?.id === channel.id 
-                    ? 'bg-[#1164A3] text-white font-medium' 
-                    : 'text-[#b8a5b8] hover:bg-[#350d36]'
-                }`}
-              >
-                <Hash className="w-4 h-4 opacity-70" />
-                <span className="truncate">{channel.name}</span>
-              </button>
-            ))}
-            {channels.length === 0 && (
-              <div className="px-3 text-sm text-[#b8a5b8] opacity-70">No channels yet</div>
-            )}
-          </div>
-        </div>
-        
-        <div className="p-4 border-t border-[#522653] bg-[#350d36] flex items-center gap-3">
-          <div className="w-8 h-8 rounded-md bg-indigo-500 text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-sm relative">
-            {session.user.name?.[0] || session.user.email[0].toUpperCase()}
-            {isConnected && <span className="absolute -bottom-1 -right-1 w-3 h-3 bg-green-500 border-2 border-[#350d36] rounded-full"></span>}
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-white truncate leading-tight">{session.user.name || session.user.email.split('@')[0]}</p>
-            <p className="text-xs text-[#b8a5b8] truncate capitalize">{activeOrg?.activeMember?.role || 'Member'}</p>
-          </div>
-        </div>
-      </aside>
+          <ChatArea 
+            activeChannel={activeChannel} messages={messages} user={session.user} onSendMessage={handleSendMessage}
+            inputMessage={inputMessage} setInputMessage={setInputMessage} isConnected={isConnected}
+            onDeleteMessage={(id) => socket?.emit("delete_message", { messageId: id, organizationId: orgId })}
+            onAddReaction={(mid, e) => socket?.emit("add_reaction", { messageId: mid, emoji: e, organizationId: orgId })}
+            onRemoveReaction={(mid, e) => socket?.emit("remove_reaction", { messageId: mid, emoji: e, organizationId: orgId })}
+            hasPermission={hasPermission} onOpenSettings={() => setIsSettingsOpen(true)}
+            onReply={setReplyTo} replyingTo={replyingTo} onCancelReply={() => setReplyTo(null)}
+          />
+          
+          <MemberSidebar members={members} onMemberClick={(m) => { if (hasPermission("MANAGE_ROLES")) { setSelectedMember(m); setIsRoleModalOpen(true); } }} />
+        </>
+      )}
 
-      {/* Main Chat Area */}
-      <main className="flex-1 flex flex-col min-w-0 bg-white dark:bg-zinc-950 relative">
-        {activeChannel ? (
-          <>
-            <header className="h-14 border-b flex flex-col justify-center px-6 shrink-0 bg-white/95 dark:bg-zinc-950/95 z-10 shadow-sm">
-              <div className="flex items-center gap-2 font-bold text-lg">
-                <Hash className="w-5 h-5 text-muted-foreground stroke-[2.5]" />
-                {activeChannel.name}
-              </div>
-              {activeChannel.description && (
-                <div className="text-sm text-muted-foreground truncate">{activeChannel.description}</div>
-              )}
-            </header>
-
-            <div 
-              ref={scrollRef}
-              className="flex-1 overflow-y-auto pt-6 pb-2"
-            >
-              {messages.length === 0 ? (
-                <div className="flex flex-col mt-auto justify-end px-6 pb-4 opacity-80 pointer-events-none">
-                  <div className="w-16 h-16 bg-zinc-100 dark:bg-zinc-800 rounded-2xl flex items-center justify-center mb-4">
-                    <Hash className="w-10 h-10 text-muted-foreground" />
-                  </div>
-                  <div className="text-3xl mb-2 font-bold tracking-tight">Welcome to #{activeChannel.name}!</div>
-                  <p className="text-base text-muted-foreground">This is the start of the #{activeChannel.name} channel. {activeChannel.description}</p>
-                </div>
-              ) : (
-                <div className="flex flex-col">
-                  {messages.map((msg, index) => {
-                    const prevMsg = index > 0 ? messages[index - 1] : null;
-                    const isSequential = prevMsg && 
-                                         prevMsg.authorId === msg.authorId && 
-                                         (new Date(msg.createdAt).getTime() - new Date(prevMsg.createdAt).getTime() < 5 * 60 * 1000);
-
-                    return (
-                      <div key={msg.id || msg.createdAt} className={`flex px-6 group hover:bg-zinc-50 dark:hover:bg-zinc-900/50 ${isSequential ? 'py-0.5' : 'pt-4 pb-1 mt-1'}`}>
-                        <div className="min-w-[40px] w-10 mr-3 flex justify-center shrink-0">
-                          {isSequential ? (
-                             <div className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 select-none pt-1">
-                               {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                             </div>
-                          ) : (
-                            <div className="w-10 h-10 rounded-md bg-[#1164A3] text-white flex items-center justify-center font-bold shadow-sm">
-                              {msg.author?.user?.name?.[0]?.toUpperCase() || msg.author?.user?.email?.[0]?.toUpperCase() || 'U'}
-                            </div>
-                          )}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          {!isSequential && (
-                            <div className="flex items-baseline gap-2 mb-0.5 leading-tight">
-                              <span className="font-bold text-[15px]">{msg.author?.user?.name || msg.author?.user?.email?.split('@')[0] || 'User'}</span>
-                              <span className="text-xs text-muted-foreground hover:underline cursor-pointer">
-                                {formatMessageTime(msg.createdAt)}
-                              </span>
-                            </div>
-                          )}
-                          <div className="text-[15px] text-zinc-900 dark:text-zinc-100 leading-normal max-w-none whitespace-pre-wrap">
-                            {msg.content}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+      {/* Role Management Modal */}
+      {isRoleModalOpen && selectedMember && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 backdrop-blur-md p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-md bg-zinc-900 rounded-3xl shadow-2xl p-8 border border-zinc-800">
+            <div className="flex items-center gap-4 mb-8">
+               <img src={selectedMember.user.image || `https://ui-avatars.com/api/?name=${selectedMember.user.name}`} className="w-14 h-14 rounded-2xl object-cover" alt=""/>
+               <div>
+                  <h2 className="text-2xl font-bold text-zinc-100">{selectedMember.user.name}</h2>
+                  <p className="text-zinc-500 font-medium">Manage Permissions</p>
+               </div>
             </div>
-
-            <div className="px-5 pb-6 pt-2 shrink-0 bg-white dark:bg-zinc-950">
-              <form onSubmit={handleSendMessage} className="relative">
-                <div className="border border-zinc-400 dark:border-zinc-700 focus-within:border-zinc-500 focus-within:ring-4 focus-within:ring-zinc-400/20 dark:focus-within:ring-zinc-700/30 rounded-xl overflow-hidden bg-white dark:bg-zinc-900 transition-all flex flex-col">
-                  <textarea
-                    value={inputMessage}
-                    onChange={(e) => setInputMessage(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        if (inputMessage.trim() && isConnected) {
-                           handleSendMessage(e);
-                        }
-                      }
+            <div className="space-y-2 max-h-[300px] overflow-y-auto mb-8 pr-2 custom-scrollbar">
+              {availableRoles.map(role => {
+                const isAssigned = selectedMember.memberRoles.some(mr => mr.roleId === role.id);
+                return (
+                  <button key={role.id} onClick={async () => {
+                      const currentIds = selectedMember.memberRoles.map(mr => mr.roleId);
+                      const newIds = isAssigned ? currentIds.filter(id => id !== role.id) : [...currentIds, role.id];
+                      await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/orgs/${orgId}/members/${selectedMember.id}/roles`, {
+                        method: "PUT", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ roleIds: newIds })
+                      });
+                      refreshData();
                     }}
-                    placeholder={`Message #${activeChannel.name}`}
-                    className="w-full max-h-[300px] min-h-[44px] px-3 py-3 resize-none outline-none bg-transparent text-[15px] leading-relaxed"
-                    rows={1}
-                  />
-                  <div className="bg-zinc-50 dark:bg-zinc-950/50 px-2 py-2 flex justify-between items-center gap-2 border-t border-zinc-200 dark:border-zinc-800">
-                    <div className="flex gap-1 text-muted-foreground">
-                      <Button type="button" variant="ghost" size="icon" className="w-8 h-8 rounded shrink-0"><Plus className="w-4 h-4" /></Button>
+                    className={cn("w-full flex items-center justify-between p-4 rounded-2xl border transition-all", isAssigned ? "bg-indigo-600/10 border-indigo-500/30 text-indigo-400" : "bg-zinc-950 border-zinc-800 text-zinc-400 hover:border-zinc-700")}
+                  >
+                    <div className="flex items-center gap-4">
+                      <div className="w-3 h-3 rounded-full" style={{ backgroundColor: role.color || '#6366f1' }} />
+                      <span className="font-bold text-sm uppercase">{role.name}</span>
                     </div>
-                    <Button 
-                      size="icon"
-                      type="submit" 
-                      disabled={!isConnected || !inputMessage.trim()}
-                      className={`w-8 h-8 rounded shrink-0 ${inputMessage.trim() ? 'bg=[#007a5a] text-white hover:bg-[#148567]' : 'bg-transparent text-muted-foreground hover:bg-transparent'}`}
-                    >
-                      <Send className="w-4 h-4" />
-                    </Button>
-                  </div>
-                </div>
-              </form>
-              <div className="text-center mt-2 text-[11px] text-muted-foreground">
-                <span className="font-semibold">Return</span> to send, <span className="font-semibold">Shift + Return</span> to add a new line
-              </div>
+                    {isAssigned && <CheckCircle className="w-5 h-5" />}
+                  </button>
+                );
+              })}
             </div>
-          </>
-        ) : (
-          <div className="flex-1 flex flex-col items-center justify-center opacity-50">
-            <LayoutDashboard className="w-16 h-16 mb-4 text-muted-foreground" />
-            <h2 className="text-2xl font-bold">No Channel Selected</h2>
-            <p className="mt-2">Select a channel from the sidebar or create a new one.</p>
-          </div>
-        )}
-      </main>
-
-      {/* Creating Channel Modal Inline */}
-      {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="w-full max-w-md bg-background rounded-xl shadow-2xl p-6 border animate-in fade-in zoom-in-95 duration-200">
-            <h2 className="text-xl font-bold mb-1">Create a channel</h2>
-            <p className="text-sm text-muted-foreground mb-6">Channels are where your team communicates. They're best when organized around a topic — #marketing, for example.</p>
-            
-            <form onSubmit={handleCreateChannel} className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-sm font-semibold">Name</label>
-                <div className="relative">
-                  <Hash className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                  <Input 
-                    value={newChannelName}
-                    onChange={(e) => setNewChannelName(e.target.value)}
-                    placeholder="e.g. plan-budget"
-                    className="pl-9"
-                    required
-                  />
-                </div>
-              </div>
-              
-              <div className="space-y-2">
-                <label className="text-sm font-semibold">Description (optional)</label>
-                <Input 
-                  value={newChannelDesc}
-                  onChange={(e) => setNewChannelDesc(e.target.value)}
-                />
-              </div>
-
-              <div className="flex justify-end gap-3 mt-8">
-                <Button type="button" variant="ghost" onClick={() => setIsModalOpen(false)}>Cancel</Button>
-                <Button type="submit">Create</Button>
-              </div>
-            </form>
+            <Button variant="ghost" onClick={() => setIsRoleModalOpen(false)} className="w-full h-12 rounded-xl font-bold">Done</Button>
           </div>
         </div>
       )}
 
-      {/* Invite Member Modal Inline */}
-      {isInviteModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="w-full max-w-md bg-background rounded-xl shadow-2xl p-6 border animate-in fade-in zoom-in-95 duration-200">
-            <h2 className="text-xl font-bold mb-1">Invite people</h2>
-            <p className="text-sm text-muted-foreground mb-6">Invite new members to join your organization.</p>
-            
-            <form onSubmit={handleInviteMember} className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-sm font-semibold">Email address</label>
-                <Input 
-                  type="email"
-                  value={inviteEmail}
-                  onChange={(e) => setInviteEmail(e.target.value)}
-                  placeholder="name@example.com"
-                  required
-                />
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-semibold">Role</label>
-                <select 
-                  value={inviteRole}
-                  onChange={(e) => setInviteRole(e.target.value)}
-                  className="w-full h-10 px-3 py-2 bg-background border border-input rounded-md text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                  required
-                >
-                  <option value="member">Member</option>
-                  <option value="admin">Admin</option>
-                </select>
-              </div>
-
-              <div className="flex justify-end gap-3 mt-8">
-                <Button type="button" variant="ghost" onClick={() => setIsInviteModalOpen(false)}>Cancel</Button>
-                <Button type="submit">Send Invite</Button>
-              </div>
-            </form>
+      {/* Org Settings / Admin Modal */}
+      {isOrgSettingsOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-5xl h-[700px] bg-zinc-900 rounded-3xl shadow-2xl border border-zinc-800 flex overflow-hidden">
+            <aside className="w-64 bg-zinc-950 border-r border-zinc-800 p-8 flex flex-col gap-1">
+               <div className="flex items-center gap-3 px-2 mb-10 font-bold italic text-indigo-500 tracking-tighter">NEXUS ADMIN</div>
+               <SettingTab icon={Users} label="Members" active={orgSettingsTab === "members"} onClick={() => setOrgSettingsTab("members")} />
+               <SettingTab icon={ShieldAlert} label="Roles" active={orgSettingsTab === "roles"} onClick={() => setOrgSettingsTab("roles")} />
+               <div className="mt-auto pt-4"><SettingTab icon={X} label="Close Settings" onClick={() => setIsOrgSettingsOpen(false)} /></div>
+            </aside>
+            <main className="flex-1 flex flex-col bg-zinc-900 relative p-12 overflow-y-auto custom-scrollbar">
+               <button onClick={() => setIsOrgSettingsOpen(false)} className="absolute top-8 right-8 p-2 rounded-xl hover:bg-zinc-800 text-zinc-400"><X className="w-6 h-6"/></button>
+               {orgSettingsTab === "members" && (
+                 <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+                    <h2 className="text-3xl font-bold text-zinc-100 mb-2">Workspace Members</h2>
+                    <p className="text-zinc-400 mb-10 font-medium">Managing access for {activeOrg?.name}.</p>
+                    <div className="space-y-3">
+                       {members.map(m => (
+                         <div key={m.id} className="flex items-center justify-between p-4 rounded-2xl bg-zinc-950 border border-zinc-800">
+                            <div className="flex items-center gap-4">
+                               <img src={m.user.image || `https://ui-avatars.com/api/?name=${m.user.name}`} className="w-12 h-12 rounded-xl" alt=""/>
+                               <div>
+                                  <div className="font-bold text-zinc-100 text-lg leading-tight">{m.user.name}</div>
+                                  <div className="text-zinc-500 text-sm">{m.user.email}</div>
+                               </div>
+                            </div>
+                            <Button size="sm" variant="outline" className="rounded-xl font-bold" onClick={() => { setSelectedMember(m); setIsRoleModalOpen(true); }}>Manage</Button>
+                         </div>
+                       ))}
+                    </div>
+                 </div>
+               )}
+            </main>
           </div>
         </div>
       )}
 
+      {/* User Settings Modal */}
+      {isSettingsOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-4xl h-[600px] bg-zinc-900 rounded-[2.5rem] shadow-2xl border border-zinc-800 flex overflow-hidden">
+            <aside className="w-64 bg-zinc-950 border-r border-zinc-800 p-8 flex flex-col gap-1">
+               <div className="flex items-center gap-3 px-2 mb-10 font-bold italic text-indigo-500 tracking-tighter">NEXUS SETTINGS</div>
+               <SettingTab icon={User} label="Profile" active={activeSettingsTab === "identity"} onClick={() => setActiveSettingsTab("identity")} />
+               <SettingTab icon={Shield} label="Security" active={activeSettingsTab === "security"} onClick={() => setActiveSettingsTab("security")} />
+               <div className="mt-auto pt-4"><SettingTab icon={LogOut} label="Log Out" danger onClick={() => signOut({ fetchOptions: { onSuccess: () => router.push("/") } })} /></div>
+            </aside>
+            <main className="flex-1 flex flex-col bg-zinc-900 relative p-12">
+               <button onClick={() => setIsSettingsOpen(false)} className="absolute top-8 right-8 p-2 rounded-xl hover:bg-zinc-800 text-zinc-400 transition-all"><X className="w-6 h-6"/></button>
+               {activeSettingsTab === "identity" && (
+                 <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+                    <h2 className="text-3xl font-bold text-zinc-100 mb-2">My Profile</h2>
+                    <p className="text-zinc-400 mb-12 font-medium">Update your Nexus identity.</p>
+                    <div className="space-y-10">
+                       <div className="flex items-center gap-8 p-6 rounded-3xl bg-zinc-950 border border-zinc-800 w-fit">
+                          <img src={session.user.image || `https://ui-avatars.com/api/?name=${session.user.name}`} className="w-24 h-24 rounded-2xl object-cover ring-4 ring-zinc-900 shadow-2xl" alt=""/>
+                          <div className="flex flex-col gap-3">
+                             <span className="text-[11px] font-bold uppercase text-zinc-500">Global Role</span>
+                             <div className="px-4 py-1.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 font-bold text-[11px] uppercase tracking-widest">{activeOrg?.role?.toUpperCase() || "MEMBER"}</div>
+                          </div>
+                       </div>
+                       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                         <div className="space-y-3">
+                           <label className="text-[11px] font-bold uppercase text-zinc-500 ml-1">Display Name</label>
+                           <Input value={editName} onChange={e => setEditName(e.target.value)} className="h-14 bg-zinc-950 border-zinc-800 rounded-2xl px-6 font-bold text-lg"/>
+                         </div>
+                         <div className="space-y-3">
+                           <label className="text-[11px] font-bold uppercase text-zinc-500 ml-1">Status / Role</label>
+                           <Input value={editJobTitle} onChange={e => setEditJobTitle(e.target.value)} className="h-14 bg-zinc-950 border-zinc-800 rounded-2xl px-6 font-medium"/>
+                         </div>
+                       </div>
+                       <Button onClick={handleUpdateProfile} disabled={isSavingProfile} className="h-14 px-10 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl shadow-xl shadow-indigo-500/20 transition-all active:scale-95">
+                         {isSavingProfile ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Save className="w-5 h-5 mr-3"/> Save Changes</>}
+                       </Button>
+                    </div>
+                 </div>
+               )}
+            </main>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

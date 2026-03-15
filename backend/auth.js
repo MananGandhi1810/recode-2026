@@ -28,6 +28,24 @@ export const auth = betterAuth({
     database: prismaAdapter(prisma, {
         provider: "postgresql",
     }),
+    user: {
+        additionalFields: {
+            jobTitle: {
+                type: "string",
+                required: false
+            },
+            status: {
+                type: "string",
+                required: false,
+                defaultValue: "OFFLINE"
+            },
+            lastSeen: {
+                type: "date",
+                required: false,
+                defaultValue: new Date()
+            }
+        }
+    },
     secondaryStorage: {
         get: async (key) => {
             return await redis.get(key);

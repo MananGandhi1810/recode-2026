@@ -4,32 +4,29 @@ import {
     handleLeaveRoom,
     handleSendMessage,
     handleDeleteMessage,
-    handleAddReaction
+    handleAddReaction,
+    handleRemoveReaction,
+    handleTyping,
+    handleUpdateStatus,
+    handleMarkRead
 } from "../handlers/socket-handler.js";
 import { auth } from "../auth.js";
-import { parse } from "cookie"; // You might need to install 'cookie' parser or use raw headers. Better Auth sends session in cookies usually
+import { prisma } from "../utils/prisma.js";
 
 export const registerSocketRoutes = (io) => {
     // Middleware for Socket Auth
     io.use(async (socket, next) => {
         try {
-            // First check for session token in auth payload (if frontend passes it)
             const token = socket.handshake.auth?.token;
             let session = null;
 
             if (token) {
-                // If using Bearer token
                 session = await auth.api.getSession({
-                    headers: new Headers({
-                        authorization: `Bearer ${token}`
-                    })
+                    headers: new Headers({ authorization: `Bearer ${token}` })
                 });
             } else if (socket.handshake.headers.cookie) {
-                // Fallback to cookie
                 session = await auth.api.getSession({
-                    headers: new Headers({
-                        cookie: socket.handshake.headers.cookie
-                    })
+                    headers: new Headers({ cookie: socket.handshake.headers.cookie })
                 });
             }
 
@@ -37,8 +34,15 @@ export const registerSocketRoutes = (io) => {
                 return next(new Error("Unauthorized"));
             }
 
-            // Attach user to socket
             socket.user = session.user;
+            
+            // Mark user as online upon connection
+            await prisma.user.update({
+                where: { id: socket.user.id },
+                data: { status: "ONLINE", lastSeen: new Date() }
+            });
+            io.emit("user_status_changed", { userId: socket.user.id, status: "ONLINE" });
+
             next();
         } catch (error) {
             console.error("Socket authentication error:", error);
@@ -55,7 +59,12 @@ export const registerSocketRoutes = (io) => {
         socket.on("send_message", handleSendMessage(socket, io));
         socket.on("delete_message", handleDeleteMessage(socket, io));
         socket.on("add_reaction", handleAddReaction(socket, io));
+        socket.on("remove_reaction", handleRemoveReaction(socket, io));
+        
+        socket.on("typing", handleTyping(socket, io));
+        socket.on("update_status", handleUpdateStatus(socket, io));
+        socket.on("mark_read", handleMarkRead(socket, io));
 
-        socket.on("disconnect", handleSocketDisconnect(socket));
+        socket.on("disconnect", handleSocketDisconnect(socket, io));
     });
 };

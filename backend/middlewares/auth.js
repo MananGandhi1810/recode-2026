@@ -42,6 +42,11 @@ export const requireOrgMember = async (req, res, next) => {
                     organizationId: orgId,
                     userId: req.user.id
                 }
+            },
+            include: {
+                memberRoles: {
+                    include: { role: true }
+                }
             }
         });
 
@@ -61,7 +66,24 @@ export const requireOrgMember = async (req, res, next) => {
             });
         }
 
+        // Aggregate permissions
+        const permissions = new Set();
+        if (member.role === "owner" || member.role === "admin") {
+            // Give all permissions for legacy roles
+            ["VIEW_CHANNELS", "SEND_MESSAGES", "CREATE_CHANNELS", "MANAGE_CHANNELS", "MANAGE_MESSAGES", "MANAGE_ROLES", "BAN_MEMBERS"].forEach(p => permissions.add(p));
+        }
+        
+        member.memberRoles.forEach(mr => {
+            mr.role.permissions.forEach(p => permissions.add(p));
+        });
+
+        // Add base permissions if not present
+        if (permissions.size === 0) {
+            ["VIEW_CHANNELS", "SEND_MESSAGES", "ADD_REACTIONS"].forEach(p => permissions.add(p));
+        }
+
         req.member = member;
+        req.permissions = Array.from(permissions);
         next();
     } catch (error) {
         console.error("Org auth middleware error:", error);
@@ -73,18 +95,23 @@ export const requireOrgMember = async (req, res, next) => {
     }
 };
 
+export const requirePermission = (permission) => {
+    return (req, res, next) => {
+        if (!req.permissions || !req.permissions.includes(permission)) {
+            return res.status(403).json({
+                success: false,
+                message: `Forbidden: Missing permission ${permission}`,
+                data: null
+            });
+        }
+        next();
+    };
+};
+
+// Compatibility wrapper
 export const requireOrgAdmin = (req, res, next) => {
-    if (!req.member) {
-        return res.status(401).json({ success: false, message: "Member context missing" });
+    if (req.permissions.includes("MANAGE_CHANNELS") || req.permissions.includes("MANAGE_ROLES")) {
+        return next();
     }
-
-    if (req.member.role !== "admin" && req.member.role !== "owner") {
-        return res.status(403).json({
-            success: false,
-            message: "Forbidden: Requires Admin or Owner role",
-            data: null
-        });
-    }
-
-    next();
+    return res.status(403).json({ success: false, message: "Forbidden: Admin access required" });
 };
