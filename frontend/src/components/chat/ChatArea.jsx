@@ -2,6 +2,7 @@
 
 import { useRef, useEffect, useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
+import React from "react";
 import { Hash, Bell, Search, AtSign, Settings, Smile, PlusCircle, Send, Paperclip, MoreHorizontal, MessageSquare, Trash2, Reply, X, FileIcon, Image as ImageIcon, Plus, Lock, Copy, Pencil } from "lucide-react";
 import { UploadButton } from "@/lib/uploadthing";
 import ReactMarkdown from "react-markdown";
@@ -51,13 +52,16 @@ export default function ChatArea({
     }
   }, [messages]);
 
+  // FIXED: Using "mousedown" and checking for a specific class to prevent the 
+  // instant-close bug caused by React 18 event bubbling conflicts.
   useEffect(() => {
-    const handleClickOutside = () => {
+    const handleClickOutside = (e) => {
+      if (e.target.closest('.ignore-click-outside')) return;
       setShowEmojiPicker(null);
       setShowMoreMenu(null);
     };
-    document.addEventListener("click", handleClickOutside);
-    return () => document.removeEventListener("click", handleClickOutside);
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
   useEffect(() => {
@@ -98,7 +102,7 @@ export default function ChatArea({
 
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      onSendMessage(e);
+      onSendMessage(e, pendingAttachment);
       if (typingTimeoutRef.current) {
         clearTimeout(typingTimeoutRef.current);
         onTyping?.(false);
@@ -155,7 +159,7 @@ export default function ChatArea({
   const filteredMembers = useMemo(() => {
     if (mentionSearch === null) return [];
     const base = members || [];
-    const filtered = base.filter(m => m.user.name.toLowerCase().includes(mentionSearch.toLowerCase())).slice(0, 8);
+    const filtered = base.filter(m => m.user?.name?.toLowerCase().includes(mentionSearch.toLowerCase())).slice(0, 8);
     if ("everyone".includes(mentionSearch.toLowerCase())) return ["everyone", ...filtered];
     return filtered;
   }, [mentionSearch, members]);
@@ -166,18 +170,21 @@ export default function ChatArea({
     { label: "Objects", emojis: ["💻", "📱", "💡", "🔑", "🛡️", "📦", "🎨", "🎮"] }
   ];
 
-  const MentionedText = ({ content, members }) => {
-    if (!content) return null;
-    const parts = content.split(/(@\w+|@everyone)/g);
-    return parts.map((part, i) => {
-      if (part === "@everyone") return <span key={i} className="mention">@everyone</span>;
-      if (part.startsWith("@")) {
-        const name = part.slice(1);
-        const exists = members?.some(m => m.user.name.toLowerCase().replace(/\s+/g, '') === name.toLowerCase());
-        if (exists) return <span key={i} className="user-mention">{part}</span>;
-      }
-      return part;
-    });
+  // FIXED: Converts raw @tags into Markdown links so ReactMarkdown renders them without erasing them
+  const formatMentions = (text, channelMembers) => {
+    if (!text) return "";
+    let formatted = text.replace(/@everyone/g, '[@everyone](#mention)');
+    
+    if (channelMembers && channelMembers.length > 0) {
+      channelMembers.forEach(m => {
+        const name = m.user?.name?.replace(/\s+/g, '');
+        if (name) {
+          const regex = new RegExp(`@${name}(?!\\w)`, 'gi');
+          formatted = formatted.replace(regex, `[@${name}](#mention)`);
+        }
+      });
+    }
+    return formatted;
   };
 
   const typingList = Object.keys(typingUsers || {}).map(uid => members?.find(m => m.userId === uid)?.user?.name).filter(Boolean);
@@ -238,6 +245,8 @@ export default function ChatArea({
                 return acc;
               }, {});
 
+              const isMenuOpen = showEmojiPicker === msg.id || showMoreMenu === msg.id;
+
               return (
                 <div key={msg.id} id={`msg-${msg.id}`} className={cn("flex group hover:bg-[#44475a]/30 px-4 py-1.5 -mx-4 transition-all relative rounded-xl", isSeq ? "mt-0.5" : "mt-6")}>
                   {!isSeq ? (
@@ -266,8 +275,19 @@ export default function ChatArea({
                     )}
 
                     <div className="text-[15px] text-[#f8f8f2] leading-relaxed prose prose-zinc prose-invert max-w-none break-words font-normal">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {msg.content}
+                      <ReactMarkdown 
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          a: ({ node, href, children }) => {
+                            // Intercepting our custom mention links to render them as colored pills
+                            if (href === '#mention') {
+                              return <span className="bg-[#bd93f9]/20 text-[#bd93f9] font-semibold px-1 rounded cursor-pointer hover:underline">{children}</span>;
+                            }
+                            return <a href={href} target="_blank" rel="noopener noreferrer" className="text-[#8be9fd] hover:underline">{children}</a>;
+                          }
+                        }}
+                      >
+                        {formatMentions(msg.content, members)}
                       </ReactMarkdown>
                     </div>
 
@@ -304,17 +324,17 @@ export default function ChatArea({
                       </div>
                     )}
                     
-                    <div className="absolute -top-4 right-4 bg-[#44475a] border border-[#6272a4]/50 shadow-2xl rounded-xl flex items-center p-1 opacity-0 group-hover:opacity-100 transition-all z-10 translate-y-1 group-hover:translate-y-0">
+                    <div className={cn("absolute -top-4 right-4 bg-[#44475a] border border-[#6272a4]/50 shadow-2xl rounded-xl flex items-center p-1 transition-all z-10 translate-y-1", isMenuOpen ? "opacity-100 translate-y-0" : "opacity-0 group-hover:opacity-100 group-hover:translate-y-0")}>
                        <div className="relative">
-                        <button onClick={(e) => { e.stopPropagation(); setShowEmojiPicker(showEmojiPicker === msg.id ? null : msg.id); setShowMoreMenu(null); }} className="p-2 hover:bg-[#6272a4] rounded-lg text-[#f8f8f2] transition-all"><Smile className="w-4.5 h-4.5"/></button>
+                        <button type="button" onClick={() => { setShowEmojiPicker(showEmojiPicker === msg.id ? null : msg.id); setShowMoreMenu(null); }} className="ignore-click-outside p-2 hover:bg-[#6272a4] rounded-lg text-[#f8f8f2] transition-all"><Smile className="w-4.5 h-4.5 pointer-events-none"/></button>
                         {showEmojiPicker === msg.id && (
-                          <div onClick={e => e.stopPropagation()} className="absolute bottom-full right-0 mb-3 bg-[#282a36] border border-[#44475a] rounded-xl p-4 shadow-[0_20px_50px_rgba(0,0,0,0.5)] z-20 animate-in zoom-in-95 duration-100 backdrop-blur-xl w-64">
+                          <div className="ignore-click-outside absolute bottom-full right-0 mb-3 bg-[#282a36] border border-[#44475a] rounded-xl p-4 shadow-[0_20px_50px_rgba(0,0,0,0.5)] z-20 animate-in zoom-in-95 duration-100 backdrop-blur-xl w-64">
                             {emojiCategories.map(cat => (
                               <div key={cat.label} className="mb-3 last:mb-0">
                                 <div className="text-[10px] font-semibold uppercase text-[#6272a4] mb-2 px-1 text-left">{cat.label}</div>
                                 <div className="grid grid-cols-4 gap-1">
                                   {cat.emojis.map(emoji => (
-                                    <button key={emoji} onClick={() => { onAddReaction(msg.id, emoji); setShowEmojiPicker(null); }} className="w-9 h-9 flex items-center justify-center hover:bg-[#44475a] rounded-xl text-xl transition-all active:scale-90">{emoji}</button>
+                                    <button key={emoji} type="button" onClick={() => { onAddReaction(msg.id, emoji); setShowEmojiPicker(null); }} className="w-9 h-9 flex items-center justify-center hover:bg-[#44475a] rounded-xl text-xl transition-all active:scale-90">{emoji}</button>
                                   ))}
                                 </div>
                               </div>
@@ -322,15 +342,15 @@ export default function ChatArea({
                           </div>
                         )}
                        </div>
-                       <button onClick={() => onReply(msg)} className="p-2 hover:bg-[#6272a4] rounded-lg text-[#f8f8f2] transition-all"><Reply className="w-4.5 h-4.5"/></button>
+                       <button type="button" onClick={() => onReply(msg)} className="p-2 hover:bg-[#6272a4] rounded-lg text-[#f8f8f2] transition-all"><Reply className="w-4.5 h-4.5"/></button>
                        
                        <div className="relative">
-                        <button onClick={(e) => { e.stopPropagation(); setShowMoreMenu(showMoreMenu === msg.id ? null : msg.id); setShowEmojiPicker(null); }} className="p-2 hover:bg-[#6272a4] rounded-lg text-[#f8f8f2] transition-all"><MoreHorizontal className="w-4.5 h-4.5"/></button>
+                        <button type="button" onClick={() => { setShowMoreMenu(showMoreMenu === msg.id ? null : msg.id); setShowEmojiPicker(null); }} className="ignore-click-outside p-2 hover:bg-[#6272a4] rounded-lg text-[#f8f8f2] transition-all"><MoreHorizontal className="w-4.5 h-4.5 pointer-events-none"/></button>
                         {showMoreMenu === msg.id && (
-                          <div onClick={e => e.stopPropagation()} className="absolute bottom-full right-0 mb-3 bg-[#282a36] border border-[#44475a] rounded-xl overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.5)] z-20 animate-in zoom-in-95 duration-100 w-48 py-1.5">
-                             <button onClick={() => { navigator.clipboard.writeText(msg.content); setShowMoreMenu(null); }} className="w-full flex items-center gap-3 px-4 py-2 text-sm text-[#f8f8f2] hover:bg-[#bd93f9] hover:text-[#282a36] transition-all"><Copy className="w-4 h-4" /> Copy Text</button>
+                          <div className="ignore-click-outside absolute bottom-full right-0 mb-3 bg-[#282a36] border border-[#44475a] rounded-xl overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.5)] z-20 animate-in zoom-in-95 duration-100 w-48 py-1.5">
+                             <button type="button" onClick={() => { navigator.clipboard.writeText(msg.content); setShowMoreMenu(null); }} className="w-full flex items-center gap-3 px-4 py-2 text-sm text-[#f8f8f2] hover:bg-[#bd93f9] hover:text-[#282a36] transition-all"><Copy className="w-4 h-4" /> Copy Text</button>
                              {(hasPermission && (hasPermission("MANAGE_MESSAGES") || msg.author?.userId === user.id)) && (
-                               <button onClick={(e) => { handleDeleteClick(e, msg.id); setShowMoreMenu(null); }} className="w-full flex items-center gap-3 px-4 py-2 text-sm text-[#ff5555] hover:bg-[#ff5555] hover:text-[#f8f8f2] transition-all"><Trash2 className="w-4 h-4" /> Delete Message</button>
+                               <button type="button" onClick={(e) => { handleDeleteClick(e, msg.id); setShowMoreMenu(null); }} className="w-full flex items-center gap-3 px-4 py-2 text-sm text-[#ff5555] hover:bg-[#ff5555] hover:text-[#f8f8f2] transition-all"><Trash2 className="w-4 h-4" /> Delete Message</button>
                              )}
                           </div>
                         )}
@@ -351,7 +371,7 @@ export default function ChatArea({
                <div className="p-3 border-b border-[#44475a] text-[10px] font-black uppercase tracking-widest text-[#6272a4]">Members matching "{mentionSearch}"</div>
                <div className="max-h-64 overflow-y-auto custom-scrollbar">
                   {filteredMembers.map((m, i) => (
-                    <button key={m === "everyone" ? "everyone" : m.id} onClick={() => applyMention(m)} onMouseEnter={() => setMentionIndex(i)} className={cn("w-full flex items-center gap-3 px-4 py-3 transition-all text-left", i === mentionIndex ? "bg-[#bd93f9]/20 text-[#bd93f9]" : "hover:bg-[#44475a] text-[#f8f8f2]")}>
+                    <button key={m === "everyone" ? "everyone" : m.id} type="button" onClick={() => applyMention(m)} onMouseEnter={() => setMentionIndex(i)} className={cn("w-full flex items-center gap-3 px-4 py-3 transition-all text-left", i === mentionIndex ? "bg-[#bd93f9]/20 text-[#bd93f9]" : "hover:bg-[#44475a] text-[#f8f8f2]")}>
                       {m === "everyone" ? (
                         <div className="w-8 h-8 rounded-full bg-[#bd93f9] flex items-center justify-center text-[#282a36] font-bold text-[10px]">ALL</div>
                       ) : (
@@ -386,7 +406,7 @@ export default function ChatArea({
                   <Reply className="w-4 h-4 text-[#bd93f9]" />
                   <span className="text-xs font-semibold text-[#f8f8f2] uppercase tracking-widest">Replying to <span className="text-[#bd93f9]">@{replyingTo.author?.user?.name}</span></span>
                </div>
-               <button onClick={onCancelReply} className="p-1 hover:bg-[#6272a4] rounded-md transition-all text-[#6272a4] hover:text-[#f8f8f2]"><X className="w-4 h-4" /></button>
+               <button type="button" onClick={onCancelReply} className="p-1 hover:bg-[#6272a4] rounded-md transition-all text-[#6272a4] hover:text-[#f8f8f2]"><X className="w-4 h-4" /></button>
             </div>
           )}
 
@@ -403,45 +423,60 @@ export default function ChatArea({
                     <span className="text-[10px] font-semibold text-[#50fa7b] uppercase tracking-widest">Ready to upload</span>
                   </div>
                </div>
-               <button onClick={() => setPendingAttachment(null)} className="p-1.5 hover:bg-[#6272a4] rounded-xl text-[#6272a4] hover:text-[#ff5555] transition-all"><X className="w-5 h-5" /></button>
+               <button type="button" onClick={() => setPendingAttachment(null)} className="p-1.5 hover:bg-[#6272a4] rounded-xl text-[#6272a4] hover:text-[#ff5555] transition-all"><X className="w-5 h-5" /></button>
             </div>
           )}
 
-          <div className={cn("bg-[#44475a]/50 border border-[#6272a4]/30 rounded-2xl overflow-hidden focus-within:border-[#bd93f9]/50 transition-all shadow-2xl", (replyingTo || pendingAttachment) && "rounded-t-none border-t-0")}>
+          <div className={cn("bg-[#44475a]/50 border border-[#6272a4]/30 rounded-2xl focus-within:border-[#bd93f9]/50 transition-all shadow-2xl relative", (replyingTo || pendingAttachment) && "rounded-t-none border-t-0")}>
              <div className="flex items-start px-2 py-2">
                 <div className="mt-1.5 ml-1 relative">
-                   <div className="w-10 h-10 rounded-xl bg-[#44475a] flex items-center justify-center text-[#6272a4] hover:text-[#f8f8f2] transition-all cursor-pointer shadow-inner">
-                      <Plus className="w-5 h-5" />
+                   <div className="w-10 h-10 rounded-xl bg-[#44475a] flex items-center justify-center text-[#6272a4] hover:text-[#f8f8f2] transition-all shadow-inner relative overflow-hidden group/upload">
+                      {/* FIXED: pointer-events-none prevents the SVG from blocking the UploadButton */}
+                      <Plus className="w-5 h-5 absolute z-0 group-hover:text-[#f8f8f2] pointer-events-none" />
+                      
+                      {/* FIXED: appearance prop forces 100% width/height and highest z-index so clicks always register */}
                       <UploadButton 
                         endpoint="chatAttachment" 
-                        className="absolute inset-0 opacity-0 ut-button:w-full ut-button:h-full ut-allowed-content:hidden ut-label:hidden" 
+                        appearance={{
+                          button: { width: '100%', height: '100%', position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', zIndex: 10 },
+                          allowedContent: { display: 'none' }
+                        }}
                         onClientUploadComplete={(res) => { if (res?.[0]) setPendingAttachment(res[0]); }}
                       />
                    </div>
                 </div>
                 <textarea ref={inputRef} value={inputMessage} onChange={handleInputChange} onKeyDown={handleKeyDown} placeholder={`Message #${activeChannel.name}`} className="flex-1 bg-transparent border-none outline-none py-3.5 px-4 resize-none text-[15px] text-[#f8f8f2] min-h-[48px] max-h-[400px] placeholder:text-[#6272a4] font-normal leading-relaxed z-10" rows={1} />
                 <div className="flex items-center gap-1 mt-1.5 mr-1">
-                  <div 
-                    role="button" 
-                    onClick={(e) => { e.stopPropagation(); setShowEmojiPicker(showEmojiPicker === 'input' ? null : 'input'); setShowMoreMenu(null); }} 
-                    className="p-2.5 text-[#6272a4] hover:text-[#f8f8f2] transition-all rounded-xl hover:bg-[#44475a] relative cursor-pointer"
+                  
+                  {/* FIXED: Changed from div to button, added ignore-click-outside class */}
+                  <button 
+                    type="button" 
+                    onClick={() => { setShowEmojiPicker(showEmojiPicker === 'input' ? null : 'input'); setShowMoreMenu(null); }} 
+                    className="ignore-click-outside p-2.5 text-[#6272a4] hover:text-[#f8f8f2] transition-all rounded-xl hover:bg-[#44475a] relative cursor-pointer"
                   >
-                    <Smile className="w-5 h-5" />
+                    <Smile className="w-5 h-5 pointer-events-none" />
                     {showEmojiPicker === 'input' && (
-                      <div onClick={e => e.stopPropagation()} className="absolute bottom-full right-0 mb-3 bg-[#282a36] border border-[#44475a] rounded-xl p-4 shadow-[0_20px_50px_rgba(0,0,0,0.5)] z-[60] animate-in zoom-in-95 duration-100 backdrop-blur-xl w-64">
+                      <div className="ignore-click-outside absolute bottom-[calc(100%+12px)] right-0 bg-[#282a36] border border-[#44475a] rounded-xl p-4 shadow-[0_20px_50px_rgba(0,0,0,0.5)] z-[60] animate-in zoom-in-95 duration-100 backdrop-blur-xl w-64 text-left cursor-default">
                         {emojiCategories.map(cat => (
                           <div key={cat.label} className="mb-3 last:mb-0">
                             <div className="text-[10px] font-semibold uppercase text-[#6272a4] mb-2 px-1 text-left">{cat.label}</div>
                             <div className="grid grid-cols-4 gap-1">
                               {cat.emojis.map(emoji => (
-                                <button key={emoji} onClick={(e) => { e.stopPropagation(); setInputMessage(prev => prev + emoji); setShowEmojiPicker(null); }} className="w-9 h-9 flex items-center justify-center hover:bg-[#44475a] rounded-xl text-xl transition-all active:scale-90">{emoji}</button>
+                                <div 
+                                  key={emoji} 
+                                  onClick={(e) => { e.stopPropagation(); setInputMessage(prev => prev + emoji); setShowEmojiPicker(null); }} 
+                                  className="w-9 h-9 flex items-center justify-center hover:bg-[#44475a] rounded-xl text-xl transition-all active:scale-90 cursor-pointer"
+                                >
+                                  {emoji}
+                                </div>
                               ))}
                             </div>
                           </div>
                         ))}
                       </div>
                     )}
-                  </div>
+                  </button>
+                  
                   <button
                     onClick={e => {
                       e.preventDefault();

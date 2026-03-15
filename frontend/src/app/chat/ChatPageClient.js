@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { io } from "socket.io-client";
 import { useSession, authClient, signOut } from "@/lib/auth-client";
-import { Loader2, X, Hash, Save, Shield, User, Key, Bell, Zap, LogOut, CheckCircle, Search, Settings, MoreHorizontal, Plus, Users, ShieldAlert, Palette, Lock, Edit2, AlertTriangle, Trash2, Mail, Copy, RefreshCw, Smile } from "lucide-react";
+import { Loader2, X, Hash, Save, Shield, User, Key, Bell, Zap, LogOut, CheckCircle, Search, Settings, MoreHorizontal, Plus, PlusCircle, Users, ShieldAlert, Palette, Lock, Edit2, AlertTriangle, Trash2, Mail, Copy, RefreshCw, Smile } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
