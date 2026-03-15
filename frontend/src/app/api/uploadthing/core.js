@@ -23,4 +23,12 @@ export const ourFileRouter = {
     .onUploadComplete(async ({ file }) => {
       return { url: file.url };
     }),
+
+  workspaceEmoji: f({ image: { maxFileSize: "1MB", maxFileCount: 1 } })
+    .middleware(async ({ req }) => {
+      return { };
+    })
+    .onUploadComplete(async ({ file }) => {
+      return { url: file.url };
+    }),
 };

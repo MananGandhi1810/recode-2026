@@ -18,24 +18,30 @@ export const handleSocketDisconnect = (socket, io) => {
 
 export const handleJoinRoom = (socket) => {
     return async ({ roomId }) => {
-        console.log(`User ${socket.user?.id} joining room ${roomId}`);
-        socket.join(roomId);
+        if (!roomId) return;
+        const roomIdStr = String(roomId);
+        console.log(`User ${socket.user?.id} joining room ${roomIdStr}`);
+        socket.join(roomIdStr);
     };
 };
 
 export const handleLeaveRoom = (socket) => {
     return async ({ roomId }) => {
-        console.log(`User ${socket.user?.id} leaving room ${roomId}`);
-        socket.leave(roomId);
+        if (!roomId) return;
+        const roomIdStr = String(roomId);
+        console.log(`User ${socket.user?.id} leaving room ${roomIdStr}`);
+        socket.leave(roomIdStr);
     };
 };
 
 export const handleTyping = (socket, io) => {
     return async ({ roomId, isTyping }) => {
-        socket.to(roomId).emit("user_typing", { 
+        if (!roomId) return;
+        const roomIdStr = String(roomId);
+        socket.to(roomIdStr).emit("user_typing", { 
             userId: socket.user.id, 
             isTyping,
-            roomId 
+            roomId: roomIdStr 
         });
     };
 };
@@ -45,7 +51,10 @@ export const handleSendMessage = (socket, io) => {
         try {
             const { content, channelId, organizationId, attachmentUrl, attachmentType, attachmentName, attachmentSize, parentMessageId } = data;
             
-            console.log("Processing message for channel:", channelId, "from user:", socket.user.id);
+            if (!channelId) return;
+            const channelIdStr = String(channelId);
+
+            console.log("Processing message for channel:", channelIdStr, "from user:", socket.user.id);
 
             const member = await prisma.member.findUnique({
                 where: { organizationId_userId: { organizationId, userId: socket.user.id } }
@@ -53,11 +62,24 @@ export const handleSendMessage = (socket, io) => {
 
             if (!member || member.isBanned) return;
 
+            const channel = await prisma.channel.findUnique({
+                where: { id: channelIdStr },
+                include: { channelMembers: true }
+            });
+
+            if (!channel) return;
+
+            if (channel.isPrivate) {
+                const isMember = channel.channelMembers.some(cm => cm.memberId === member.id);
+                const isAdmin = member.role === 'owner' || member.role === 'admin';
+                if (!isMember && !isAdmin) return;
+            }
+
             const newMessage = await prisma.message.create({
                 data: {
                     content: content || "",
                     authorId: member.id,
-                    channelId,
+                    channelId: channelIdStr,
                     parentMessageId: parentMessageId || null,
                     attachments: attachmentUrl ? {
                         create: {
@@ -82,7 +104,7 @@ export const handleSendMessage = (socket, io) => {
                 }
             });
 
-            io.to(channelId).emit("new_message", newMessage);
+            io.to(channelIdStr).emit("new_message", newMessage);
             
         } catch (error) {
             console.error("Socket send_message error:", error);
@@ -108,12 +130,11 @@ export const handleDeleteMessage = (socket, io) => {
                return socket.emit("error", { message: "Unauthorized" });
             }
 
-            await prisma.message.update({
-                where: { id: messageId },
-                data: { content: "This message was deleted.", isDeleted: true }
+            await prisma.message.delete({
+                where: { id: messageId }
             });
 
-            io.to(message.channelId).emit("message_deleted", { messageId, channelId: message.channelId });
+            io.to(String(message.channelId)).emit("message_deleted", { messageId, channelId: message.channelId });
         } catch (error) {
             console.error("Socket delete_message error:", error);
         }
@@ -137,7 +158,9 @@ export const handleAddReaction = (socket, io) => {
             });
 
             const message = await prisma.message.findUnique({ where: { id: messageId } });
-            io.to(message.channelId).emit("reaction_added", { reaction, messageId });
+            if (message) {
+                io.to(String(message.channelId)).emit("reaction_added", { reaction, messageId });
+            }
         } catch (error) {
             console.error("Socket add_reaction error:", error);
         }
@@ -160,7 +183,9 @@ export const handleRemoveReaction = (socket, io) => {
             if (reaction) {
                 await prisma.reaction.delete({ where: { id: reaction.id } });
                 const message = await prisma.message.findUnique({ where: { id: messageId } });
-                io.to(message.channelId).emit("reaction_removed", { reactionId: reaction.id, messageId, emoji, memberId: member.id });
+                if (message) {
+                    io.to(String(message.channelId)).emit("reaction_removed", { reactionId: reaction.id, messageId, emoji, memberId: member.id });
+                }
             }
         } catch (error) {
             console.error("Socket remove_reaction error:", error);

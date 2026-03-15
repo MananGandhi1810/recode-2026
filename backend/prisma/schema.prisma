@@ -82,6 +82,10 @@ model Organization {
   slug        String       @unique
   logo        String?
   metadata    String?
+  
+  isPublic    Boolean      @default(false)
+  joinCode    String?      @unique
+
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
@@ -90,8 +94,23 @@ model Organization {
   roles       OrganizationRole[]       
   channels    Channel[]
   categories  Category[]
+  emojis      WorkspaceEmoji[]
 
   @@map("organization")
+}
+
+model WorkspaceEmoji {
+  id             String       @id @default(cuid())
+  name           String
+  url            String
+  
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  
+  createdAt      DateTime     @default(now())
+
+  @@unique([organizationId, name])
+  @@map("workspaceEmoji")
 }
 
 model Category {

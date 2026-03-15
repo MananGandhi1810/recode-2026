@@ -1,112 +1,215 @@
 "use client";
 
+import { useState } from "react";
 import { cn } from "@/lib/utils";
-import { Hash, Plus, ChevronDown, Settings, Mic, Headphones, MessageSquare, Shield } from "lucide-react";
+import { Hash, Plus, ChevronDown, Settings, Shield, Search, AtSign, Lock } from "lucide-react";
 
 export default function ChannelSidebar({ 
   orgName, 
-  channels, 
+  organizations = [],
+  activeOrgId,
+  onOrgSelect,
+  channels = [], 
   dms = [],
   activeChannelId, 
   onChannelSelect, 
   onCreateChannelClick,
   onOrgSettingsClick,
   user,
-  hasAdminPrivileges
+  hasAdminPrivileges,
+  onUserSettingsClick,
+  searchQuery,
+  setSearchQuery,
+  unreadState = {}
 }) {
+  const [isOrgDropdownOpen, setIsOrgDropdownOpen] = useState(false);
+
+  // Admins can see all channels, including private ones
+  const filteredChannels = channels.filter(c => {
+    if (!c.isPrivate) return c.name.toLowerCase().includes(searchQuery?.toLowerCase() || "");
+    // Show private channels if user is a member or has admin privileges
+    const isMember = c.channelMembers?.some(cm => cm.member?.userId === user?.id);
+    if (isMember || hasAdminPrivileges) return c.name.toLowerCase().includes(searchQuery?.toLowerCase() || "");
+    return false;
+  });
+  const filteredDms = dms.filter(d => {
+    const otherMember = d.channelMembers?.find(cm => cm.member?.userId !== user?.id);
+    return otherMember?.member?.user?.name.toLowerCase().includes(searchQuery?.toLowerCase() || "");
+  });
+
   return (
-    <aside className="w-[240px] h-full bg-zinc-900 flex flex-col flex-shrink-0 border-r border-zinc-800/50">
-      {/* Header */}
-      <div className="relative group">
-        <button className="w-full h-12 px-4 flex items-center justify-between hover:bg-zinc-800/50 transition-colors border-b border-zinc-950/50">
-          <span className="font-bold text-[14px] text-zinc-100 truncate">{orgName}</span>
-          <ChevronDown className="w-4 h-4 text-zinc-500 group-hover:text-zinc-300 transition-colors" />
-        </button>
-        
-        {hasAdminPrivileges && (
+    <aside className="w-[280px] h-full bg-[#1e1e22] flex flex-col flex-shrink-0 border-r border-[#44475a]/30 shadow-[20px_0_50px_rgba(0,0,0,0.1)] z-20">
+      {/* Organization Header */}
+      <div className="p-4">
+        <div className="relative">
           <button 
-            onClick={onOrgSettingsClick}
-            className="absolute right-10 top-3 p-1 rounded-md bg-indigo-600/10 text-indigo-400 opacity-0 group-hover:opacity-100 hover:bg-indigo-600 hover:text-white transition-all shadow-sm"
-            title="Organization Settings"
+            onClick={() => setIsOrgDropdownOpen(!isOrgDropdownOpen)}
+            className={cn(
+              "w-full h-14 px-4 flex items-center justify-between rounded-xl transition-all border group bg-[#44475a]/20 border-[#44475a]/30 hover:border-[#bd93f9]/30",
+              isOrgDropdownOpen && "bg-[#44475a]/40 border-[#bd93f9]/50 ring-2 ring-[#bd93f9]/10"
+            )}
           >
-            <Shield className="w-3.5 h-3.5" />
+            <div className="flex items-center gap-3 min-w-0">
+               <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#bd93f9] to-[#ff79c6] flex items-center justify-center text-[#282a36] font-bold text-xs shrink-0 shadow-lg">
+                  {orgName?.[0] || "N"}
+               </div>
+               <span className="font-semibold text-sm text-[#f8f8f2] truncate tracking-tight">{orgName}</span>
+            </div>
+            <ChevronDown className={cn("w-4 h-4 text-[#6272a4] transition-transform duration-200", isOrgDropdownOpen && "rotate-180")} />
           </button>
-        )}
+
+          {isOrgDropdownOpen && (
+            <div className="absolute top-full left-0 right-0 mt-2 bg-[#282a36] border border-[#44475a] rounded-xl shadow-2xl z-50 p-2 animate-in fade-in zoom-in-95 duration-200">
+               <div className="mb-2 px-2 py-1.5 text-[10px] font-bold uppercase text-[#6272a4] tracking-widest">Switch Workspace</div>
+               {organizations.map(org => (
+                 <button 
+                   key={org.id} 
+                   onClick={() => { onOrgSelect(org.id); setIsOrgDropdownOpen(false); }}
+                   className={cn(
+                     "w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all mb-1 last:mb-0",
+                     activeOrgId === org.id ? "bg-[#bd93f9]/10 text-[#bd93f9] font-bold" : "text-[#6272a4] hover:bg-[#44475a]/30 hover:text-[#f8f8f2]"
+                   )}
+                 >
+                   <div className="w-6 h-6 rounded-md bg-[#44475a] flex items-center justify-center font-bold text-[10px] uppercase">
+                     {org.name?.[0]}
+                   </div>
+                   <span className="text-xs truncate">{org.name}</span>
+                 </button>
+               ))}
+               <div className="h-[1px] bg-[#44475a] my-2" />
+               <button className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-[#6272a4] hover:bg-[#44475a]/30 hover:text-[#f8f8f2] transition-all text-xs font-medium">
+                 <Plus className="w-4 h-4" /> New Workspace
+               </button>
+               {hasAdminPrivileges && (
+                 <button 
+                  onClick={() => { onOrgSettingsClick(); setIsOrgDropdownOpen(false); }}
+                  className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-[#bd93f9] hover:bg-[#bd93f9]/10 transition-all text-xs font-semibold"
+                 >
+                   <Shield className="w-4 h-4" /> Workspace Settings
+                 </button>
+               )}
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Channels List */}
-      <div className="flex-1 overflow-y-auto no-scrollbar p-3">
-        <div className="mb-6">
-          <div className="flex items-center justify-between px-2 mb-2 group/title">
-            <h3 className="text-[11px] font-bold uppercase tracking-wider text-zinc-500 group-hover/title:text-zinc-400 transition-colors">Text Channels</h3>
+      {/* Global Actions */}
+      <div className="px-4 mb-4">
+        <div className="relative group">
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-[#6272a4] group-focus-within:text-[#bd93f9] transition-colors" />
+          <input 
+            type="text" 
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search nexus..." 
+            className="w-full h-11 pl-10 pr-4 bg-[#44475a]/20 border border-[#44475a]/30 rounded-xl text-xs text-[#f8f8f2] placeholder:text-[#6272a4] outline-none focus:border-[#bd93f9]/30 transition-all"
+          />
+        </div>
+      </div>
+
+      {/* Sidebar Content */}
+      <div className="flex-1 overflow-y-auto custom-scrollbar px-4 pb-4">
+        {/* Text Channels */}
+        <div className="mb-8 mt-4">
+          <div className="flex items-center justify-between px-2 mb-3 group/title">
+            <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#6272a4] group-hover/title:text-[#9ea8c7] transition-colors">Channels</h3>
             {hasAdminPrivileges && (
               <button 
                 onClick={onCreateChannelClick}
-                className="text-zinc-500 hover:text-zinc-200 transition-all p-0.5 rounded-md hover:bg-zinc-800"
+                className="text-[#6272a4] hover:text-[#f8f8f2] transition-all p-1 rounded-lg hover:bg-[#44475a]/30"
               >
-                <Plus className="w-4 h-4" />
+                <Plus className="w-3.5 h-3.5" />
               </button>
             )}
           </div>
           
-          <div className="space-y-0.5">
-            {channels.map((ch) => (
-              <button
-                key={ch.id}
-                onClick={() => onChannelSelect(ch)}
-                className={cn(
-                  "w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-[14px] font-medium transition-all group",
-                  activeChannelId === ch.id 
-                    ? "bg-zinc-800 text-zinc-100 shadow-sm" 
-                    : "text-zinc-400 hover:bg-zinc-800/40 hover:text-zinc-200"
-                )}
-              >
-                <Hash className={cn(
-                  "w-4 h-4 shrink-0",
-                  activeChannelId === ch.id ? "text-zinc-100" : "text-zinc-500 group-hover:text-zinc-400"
-                )} />
-                <span className="truncate">{ch.name}</span>
-              </button>
-            ))}
+          <div className="space-y-1">
+            {filteredChannels.map((ch) => {
+              const status = unreadState[ch.id];
+              return (
+                <button
+                  key={ch.id}
+                  onClick={() => onChannelSelect(ch)}
+                  className={cn(
+                    "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all group relative font-medium",
+                    activeChannelId === ch.id 
+                      ? "bg-[#bd93f9] text-[#282a36] shadow-lg shadow-[#bd93f9]/20" 
+                      : status ? "text-[#f8f8f2] font-bold" : "text-[#6272a4] hover:bg-[#44475a]/30 hover:text-[#f8f8f2]"
+                  )}
+                >
+                  {ch.isPrivate ? (
+                    <Lock className={cn(
+                      "w-4 h-4 shrink-0",
+                      activeChannelId === ch.id ? "text-[#282a36]" : "text-[#6272a4] group-hover:text-[#9ea8c7]"
+                    )} />
+                  ) : (
+                    <Hash className={cn(
+                      "w-4 h-4 shrink-0",
+                      activeChannelId === ch.id ? "text-[#282a36]" : "text-[#6272a4] group-hover:text-[#9ea8c7]"
+                    )} />
+                  )}
+                  <span className="truncate">{ch.name}</span>
+                  
+                  {status === 'unread' && activeChannelId !== ch.id && (
+                    <div className="absolute left-[-4px] top-1/2 -translate-y-1/2 w-1.5 h-1.5 bg-[#f8f8f2] rounded-full shadow-sm" />
+                  )}
+                  {status === 'mention' && activeChannelId !== ch.id && (
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 bg-[#ff5555] rounded-full flex items-center justify-center text-[10px] font-black text-white shadow-lg animate-in zoom-in-50 duration-200">
+                       <AtSign className="w-2.5 h-2.5" />
+                    </div>
+                  )}
+                  {activeChannelId === ch.id && (
+                    <div className="absolute left-[-4px] top-1/2 -translate-y-1/2 w-1.5 h-6 bg-[#f8f8f2] rounded-full" />
+                  )}
+                </button>
+              );
+            })}
           </div>
         </div>
 
-        {/* Direct Messages */}
-        <div className="mb-6">
-          <div className="flex items-center justify-between px-2 mb-2 group/title">
-            <h3 className="text-[11px] font-bold uppercase tracking-wider text-zinc-500 group-hover/title:text-zinc-400 transition-colors">Direct Messages</h3>
-            <button className="text-zinc-500 hover:text-zinc-200 transition-all p-0.5 rounded-md hover:bg-zinc-800">
-              <Plus className="w-4 h-4" />
-            </button>
+        {/* DMs Section */}
+        <div>
+          <div className="flex items-center justify-between px-2 mb-3 group/title">
+            <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#6272a4] group-hover/title:text-[#9ea8c7] transition-colors">Messages</h3>
           </div>
           
-          <div className="space-y-0.5">
-            {dms.map((dm) => {
+          <div className="space-y-1">
+            {filteredDms.map((dm) => {
               const otherMember = dm.channelMembers?.find(cm => cm.member?.userId !== user?.id);
               const otherUser = otherMember?.member?.user;
+              const status = unreadState[dm.id];
               return (
                 <button
                   key={dm.id}
                   onClick={() => onChannelSelect(dm)}
                   className={cn(
-                    "w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-[14px] font-medium transition-all group",
+                    "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all group relative font-medium",
                     activeChannelId === dm.id 
-                      ? "bg-zinc-800 text-zinc-100 shadow-sm" 
-                      : "text-zinc-400 hover:bg-zinc-800/40 hover:text-zinc-200"
+                      ? "bg-[#44475a] text-[#f8f8f2] border border-[#6272a4]/30" 
+                      : status ? "text-[#f8f8f2] font-bold" : "text-[#6272a4] hover:bg-[#44475a]/30 hover:text-[#f8f8f2]"
                   )}
                 >
                   <div className="relative shrink-0">
                     <img 
-                      src={otherUser?.image || `https://ui-avatars.com/api/?name=${otherUser?.name || 'User'}&background=27272a&color=e4e4e7`} 
-                      className="w-5 h-5 rounded-md object-cover" 
+                      src={otherUser?.image || `https://ui-avatars.com/api/?name=${otherUser?.name || 'User'}&background=44475a&color=f8f8f2`} 
+                      className="w-6 h-6 rounded-lg object-cover grayscale group-hover:grayscale-0 transition-all" 
                       alt="" 
                     />
                     <div className={cn(
-                      "absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full border border-zinc-900",
-                      otherUser?.status === "ONLINE" ? "bg-emerald-500" : "bg-zinc-500"
+                      "absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full border border-[#1e1e22]",
+                      otherUser?.status === "ONLINE" ? "bg-[#50fa7b]" : "bg-[#6272a4]"
                     )} />
                   </div>
-                  <span className="truncate">{otherUser?.name || "Unknown User"}</span>
+                  <span className="truncate">{otherUser?.name || "Unknown"}</span>
+                  
+                  {status === 'unread' && activeChannelId !== dm.id && (
+                    <div className="absolute left-[-4px] top-1/2 -translate-y-1/2 w-1.5 h-1.5 bg-[#f8f8f2] rounded-full shadow-sm" />
+                  )}
+                  {status === 'mention' && activeChannelId !== dm.id && (
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 bg-[#ff5555] rounded-full flex items-center justify-center text-[10px] font-black text-white shadow-lg animate-in zoom-in-50 duration-200">
+                       <AtSign className="w-2.5 h-2.5" />
+                    </div>
+                  )}
                 </button>
               );
             })}
@@ -114,34 +217,22 @@ export default function ChannelSidebar({
         </div>
       </div>
 
-      {/* User Status Section */}
-      <div className="bg-zinc-950/40 p-2.5 mt-auto border-t border-zinc-800/50">
-        <div className="flex items-center gap-2">
-          <div className="flex-1 flex items-center gap-2 p-1.5 rounded-lg hover:bg-zinc-800/60 transition-all group cursor-pointer">
+      {/* User Footer Section */}
+      <div className="p-4 bg-[#1e1e22] border-t border-[#44475a]/30">
+        <div className="bg-[#44475a]/20 border border-[#44475a]/30 rounded-xl p-2 flex items-center gap-2">
+          <div onClick={onUserSettingsClick} className="flex-1 flex items-center gap-3 p-1.5 rounded-lg hover:bg-[#44475a]/40 transition-all group cursor-pointer min-w-0">
             <div className="relative shrink-0">
               <img 
-                src={user?.image || `https://ui-avatars.com/api/?name=${user?.name || 'User'}&background=27272a&color=e4e4e7`} 
-                className="w-8 h-8 rounded-lg object-cover shadow-sm border border-zinc-800" 
+                src={user?.image || `https://ui-avatars.com/api/?name=${user?.name || 'User'}&background=44475a&color=f8f8f2`} 
+                className="w-10 h-10 rounded-xl object-cover shadow-lg border border-[#44475a]/50" 
                 alt="" 
               />
-              <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 rounded-full border-2 border-zinc-900 shadow-sm" />
+              <div className="absolute -bottom-1 -right-1 w-3.5 h-3.5 bg-[#50fa7b] rounded-full border-[3px] border-[#1e1e22] shadow-md" />
             </div>
             <div className="min-w-0">
-              <div className="text-[13px] font-bold text-zinc-100 truncate leading-none group-hover:text-white">{user?.name}</div>
-              <div className="text-[10px] text-zinc-500 truncate leading-tight mt-1">Online</div>
+              <div className="text-xs font-semibold text-[#f8f8f2] truncate tracking-tight">{user?.name}</div>
+              <div className="text-[9px] font-bold text-[#6272a4] uppercase tracking-widest mt-0.5">Online</div>
             </div>
-          </div>
-          
-          <div className="flex items-center">
-            <button className="p-1.5 text-zinc-500 hover:text-zinc-200 rounded-lg hover:bg-zinc-800 transition-all" title="Mute">
-              <Mic className="w-4 h-4" />
-            </button>
-            <button className="p-1.5 text-zinc-500 hover:text-zinc-200 rounded-lg hover:bg-zinc-800 transition-all" title="Deafen">
-              <Headphones className="w-4 h-4" />
-            </button>
-            <button className="p-1.5 text-zinc-500 hover:text-zinc-200 rounded-lg hover:bg-zinc-800 transition-all" title="User Settings">
-              <Settings className="w-4 h-4" />
-            </button>
           </div>
         </div>
       </div>
