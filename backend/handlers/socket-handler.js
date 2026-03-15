@@ -25,6 +25,7 @@ export const handleLeaveRoom = (socket) => {
 export const handleSendMessage = (socket, io) => {
     return async (data) => {
         try {
+            console.log("Received send_message event with data:", data);
             const { content, channelId, threadId, organizationId } = data;
 
             // 1. Verify user is a member of the organization
@@ -37,26 +38,36 @@ export const handleSendMessage = (socket, io) => {
                 }
             });
 
-            if (!member || member.isBanned) return;
+            if (!member || member.isBanned) {
+                console.log("User is not a member or is banned.");
+                return;
+            }
 
             // 1.5 Verify RBAC (Can Write)
             if (channelId) {
                  const channel = await prisma.channel.findUnique({ where: { id: channelId } });
-                 if (!channel) return;
+                 if (!channel) {
+                     console.log("Channel not found:", channelId);
+                     return;
+                 }
                  const isSuperUser = member.role === "admin" || member.role === "owner";
                  
                  if (!isSuperUser) {
                     // Check if role is strictly read-only
                     if (channel.readOnlyRoles.includes(member.role)) {
+                        console.log("User has read-only access.");
                         return socket.emit("error", { message: "You only have read access to this channel" });
                     }
                     
                     // Check if role is allowed to write in private channel
                     if (channel.isPrivate && !channel.allowedRoles.includes(member.role)) {
+                        console.log("User does not have write access to private channel.");
                         return socket.emit("error", { message: "You do not have write access to this channel" });
                     }
                  }
             }
+
+            console.log("Creating message...");
 
             // 2. Save the message to DB
             const newMessage = await prisma.message.create({
@@ -79,8 +90,11 @@ export const handleSendMessage = (socket, io) => {
                 }
             });
 
+            console.log("Message created:", newMessage.id);
+
             // 3. Broadcast to the relevant room
             const roomId = threadId || channelId;
+            console.log("Broadcasting to room:", roomId);
             io.to(roomId).emit("new_message", newMessage);
             
         } catch (error) {
